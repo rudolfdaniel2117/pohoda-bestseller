@@ -1,11 +1,12 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { createClient } from '@/lib/supabase'
 import { parsePohodaXLS } from '@/lib/parse-pohoda'
 import type { BestsellerRow } from '@/types'
 
 const CHUNK_SIZE = 500
+const PAGE_SIZE = 25
 
 export default function HomePage() {
   const [uploading, setUploading] = useState(false)
@@ -14,9 +15,11 @@ export default function HomePage() {
   const [selectedBranch, setSelectedBranch] = useState('')
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
-  const [bestsellers, setBestsellers] = useState<BestsellerRow[]>([])
+  const [allBestsellers, setAllBestsellers] = useState<BestsellerRow[]>([])
   const [sortBy, setSortBy] = useState<'quantity' | 'profit' | 'margin'>('quantity')
   const [loading, setLoading] = useState(false)
+  const [search, setSearch] = useState('')
+  const [page, setPage] = useState(1)
   const supabase = createClient()
 
   const loadBranches = useCallback(async () => {
@@ -73,14 +76,29 @@ export default function HomePage() {
         if (sortBy === 'profit') return b.total_profit - a.total_profit
         return b.avg_margin_pct - a.avg_margin_pct
       })
-      .slice(0, 50)
 
-    setBestsellers(sorted)
+    setAllBestsellers(sorted)
+    setPage(1)
     setLoading(false)
   }, [supabase, selectedBranch, dateFrom, dateTo, sortBy])
 
   useEffect(() => { loadBranches() }, [loadBranches])
   useEffect(() => { loadBestsellers() }, [loadBestsellers])
+
+  // Reset page when search changes
+  useEffect(() => { setPage(1) }, [search])
+
+  const filtered = useMemo(() => {
+    if (!search.trim()) return allBestsellers
+    const q = search.toLowerCase()
+    return allBestsellers.filter(r =>
+      r.article_name.toLowerCase().includes(q) ||
+      r.article_code.toLowerCase().includes(q)
+    )
+  }, [allBestsellers, search])
+
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
+  const paginated = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
 
   async function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
@@ -161,13 +179,21 @@ export default function HomePage() {
             </span>
           )}
         </div>
-        <p className="text-xs text-gray-400 mt-2">
-          Formát: export pohybů zásob z POHODy (.xls)
-        </p>
+        <p className="text-xs text-gray-400 mt-2">Formát: export pohybů zásob z POHODy (.xls)</p>
       </div>
 
       {/* Filters */}
       <div className="bg-white rounded-xl border border-gray-200 p-4 flex flex-wrap gap-4 items-end">
+        <div className="flex-1 min-w-48">
+          <label className="block text-xs text-gray-500 mb-1">Hledat artikl</label>
+          <input
+            type="text"
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Název nebo kód..."
+            className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+          />
+        </div>
         <div>
           <label className="block text-xs text-gray-500 mb-1">Pobočka</label>
           <select
@@ -198,7 +224,7 @@ export default function HomePage() {
           />
         </div>
         <button
-          onClick={() => { setSelectedBranch(''); setDateFrom(''); setDateTo('') }}
+          onClick={() => { setSelectedBranch(''); setDateFrom(''); setDateTo(''); setSearch('') }}
           className="px-3 py-2 text-sm text-gray-500 hover:text-gray-700 border border-gray-200 rounded-lg"
         >
           Zrušit filtry
@@ -207,66 +233,124 @@ export default function HomePage() {
 
       {/* Results table */}
       <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-        <div className="flex border-b border-gray-200">
-          <button
-            onClick={() => setSortBy('quantity')}
-            className={`px-6 py-3 text-sm font-medium transition-colors ${sortBy === 'quantity' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-gray-500 hover:text-gray-900'}`}
-          >
-            Nejprodávanější (ks)
-          </button>
-          <button
-            onClick={() => setSortBy('profit')}
-            className={`px-6 py-3 text-sm font-medium transition-colors ${sortBy === 'profit' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-gray-500 hover:text-gray-900'}`}
-          >
-            Nejziskovější (Kč)
-          </button>
-          <button
-            onClick={() => setSortBy('margin')}
-            className={`px-6 py-3 text-sm font-medium transition-colors ${sortBy === 'margin' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-gray-500 hover:text-gray-900'}`}
-          >
-            Nejvyšší marže (%)
-          </button>
+        <div className="flex items-center border-b border-gray-200">
+          <div className="flex">
+            <button
+              onClick={() => setSortBy('quantity')}
+              className={`px-6 py-3 text-sm font-medium transition-colors ${sortBy === 'quantity' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-gray-500 hover:text-gray-900'}`}
+            >
+              Nejprodávanější (ks)
+            </button>
+            <button
+              onClick={() => setSortBy('profit')}
+              className={`px-6 py-3 text-sm font-medium transition-colors ${sortBy === 'profit' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-gray-500 hover:text-gray-900'}`}
+            >
+              Nejziskovější (Kč)
+            </button>
+            <button
+              onClick={() => setSortBy('margin')}
+              className={`px-6 py-3 text-sm font-medium transition-colors ${sortBy === 'margin' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-gray-500 hover:text-gray-900'}`}
+            >
+              Nejvyšší marže (%)
+            </button>
+          </div>
+          {filtered.length > 0 && (
+            <span className="ml-auto px-4 text-xs text-gray-400">
+              {filtered.length} artiklů
+            </span>
+          )}
         </div>
 
         {loading ? (
           <div className="p-12 text-center text-gray-400">Načítám data...</div>
-        ) : bestsellers.length === 0 ? (
+        ) : filtered.length === 0 && allBestsellers.length === 0 ? (
           <div className="p-12 text-center text-gray-400">
             <p className="text-3xl mb-3">📦</p>
             <p className="font-medium text-gray-500">Žádná data</p>
             <p className="text-sm mt-1">Nahraj XLS export z POHODy pro zobrazení žebříčku.</p>
           </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="bg-gray-50 text-xs text-gray-500 uppercase tracking-wide">
-                <tr>
-                  <th className="px-4 py-3 text-right w-10">#</th>
-                  <th className="px-4 py-3 text-left">Kód</th>
-                  <th className="px-4 py-3 text-left">Název artiklu</th>
-                  <th className="px-4 py-3 text-right">Prodej (ks)</th>
-                  <th className="px-4 py-3 text-right">Tržba</th>
-                  <th className="px-4 py-3 text-right">Zisk</th>
-                  <th className="px-4 py-3 text-right">Marže</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {bestsellers.map((row, i) => (
-                  <tr key={row.article_code} className="hover:bg-gray-50 transition-colors">
-                    <td className="px-4 py-3 text-right text-gray-400 font-mono">{i + 1}</td>
-                    <td className="px-4 py-3 text-gray-400 font-mono text-xs">{row.article_code}</td>
-                    <td className="px-4 py-3 text-gray-900 max-w-xs truncate" title={row.article_name}>
-                      {row.article_name}
-                    </td>
-                    <td className="px-4 py-3 text-right font-semibold text-gray-900">{fmt(row.net_quantity)}</td>
-                    <td className="px-4 py-3 text-right text-gray-600">{fmtCzk(row.total_revenue)}</td>
-                    <td className="px-4 py-3 text-right font-semibold text-green-700">{fmtCzk(row.total_profit)}</td>
-                    <td className={`px-4 py-3 text-right font-medium ${sortBy === 'margin' ? 'text-blue-700' : 'text-gray-500'}`}>{row.avg_margin_pct.toFixed(1)} %</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+        ) : filtered.length === 0 ? (
+          <div className="p-12 text-center text-gray-400">
+            <p className="text-3xl mb-3">🔍</p>
+            <p className="font-medium text-gray-500">Žádné výsledky</p>
+            <p className="text-sm mt-1">Zkus jiný vyhledávací výraz.</p>
           </div>
+        ) : (
+          <>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50 text-xs text-gray-500 uppercase tracking-wide">
+                  <tr>
+                    <th className="px-4 py-3 text-right w-10">#</th>
+                    <th className="px-4 py-3 text-left">Kód</th>
+                    <th className="px-4 py-3 text-left">Název artiklu</th>
+                    <th className="px-4 py-3 text-right">Prodej (ks)</th>
+                    <th className="px-4 py-3 text-right">Tržba</th>
+                    <th className="px-4 py-3 text-right">Zisk</th>
+                    <th className="px-4 py-3 text-right">Marže</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {paginated.map((row, i) => (
+                    <tr key={row.article_code} className="hover:bg-gray-50 transition-colors">
+                      <td className="px-4 py-3 text-right text-gray-400 font-mono">
+                        {(page - 1) * PAGE_SIZE + i + 1}
+                      </td>
+                      <td className="px-4 py-3 text-gray-400 font-mono text-xs">{row.article_code}</td>
+                      <td className="px-4 py-3 text-gray-900 max-w-xs truncate" title={row.article_name}>
+                        {row.article_name}
+                      </td>
+                      <td className="px-4 py-3 text-right font-semibold text-gray-900">{fmt(row.net_quantity)}</td>
+                      <td className="px-4 py-3 text-right text-gray-600">{fmtCzk(row.total_revenue)}</td>
+                      <td className="px-4 py-3 text-right font-semibold text-green-700">{fmtCzk(row.total_profit)}</td>
+                      <td className={`px-4 py-3 text-right font-medium ${sortBy === 'margin' ? 'text-blue-700' : 'text-gray-500'}`}>
+                        {row.avg_margin_pct.toFixed(1)} %
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Pagination */}
+            {totalPages > 1 && (
+              <div className="px-4 py-3 border-t border-gray-100 flex items-center justify-between text-sm">
+                <span className="text-gray-400">
+                  Strana {page} z {totalPages} ({filtered.length} artiklů)
+                </span>
+                <div className="flex gap-1">
+                  <button
+                    onClick={() => setPage(1)}
+                    disabled={page === 1}
+                    className="px-2 py-1 rounded border border-gray-200 text-gray-500 disabled:opacity-30 hover:bg-gray-50"
+                  >
+                    «
+                  </button>
+                  <button
+                    onClick={() => setPage(p => Math.max(1, p - 1))}
+                    disabled={page === 1}
+                    className="px-3 py-1 rounded border border-gray-200 text-gray-500 disabled:opacity-30 hover:bg-gray-50"
+                  >
+                    ‹ Předchozí
+                  </button>
+                  <button
+                    onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+                    disabled={page === totalPages}
+                    className="px-3 py-1 rounded border border-gray-200 text-gray-500 disabled:opacity-30 hover:bg-gray-50"
+                  >
+                    Další ›
+                  </button>
+                  <button
+                    onClick={() => setPage(totalPages)}
+                    disabled={page === totalPages}
+                    className="px-2 py-1 rounded border border-gray-200 text-gray-500 disabled:opacity-30 hover:bg-gray-50"
+                  >
+                    »
+                  </button>
+                </div>
+              </div>
+            )}
+          </>
         )}
       </div>
     </div>
