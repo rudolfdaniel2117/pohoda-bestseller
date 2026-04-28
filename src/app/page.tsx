@@ -15,7 +15,7 @@ export default function HomePage() {
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
   const [bestsellers, setBestsellers] = useState<BestsellerRow[]>([])
-  const [sortBy, setSortBy] = useState<'quantity' | 'profit'>('quantity')
+  const [sortBy, setSortBy] = useState<'quantity' | 'profit' | 'margin'>('quantity')
   const [loading, setLoading] = useState(false)
   const supabase = createClient()
 
@@ -68,9 +68,11 @@ export default function HomePage() {
 
     const sorted = [...map.values()]
       .filter(r => r.net_quantity > 0)
-      .sort((a, b) => sortBy === 'quantity'
-        ? b.net_quantity - a.net_quantity
-        : b.total_profit - a.total_profit)
+      .sort((a, b) => {
+        if (sortBy === 'quantity') return b.net_quantity - a.net_quantity
+        if (sortBy === 'profit') return b.total_profit - a.total_profit
+        return b.avg_margin_pct - a.avg_margin_pct
+      })
       .slice(0, 50)
 
     setBestsellers(sorted)
@@ -218,6 +220,12 @@ export default function HomePage() {
           >
             Nejziskovější (Kč)
           </button>
+          <button
+            onClick={() => setSortBy('margin')}
+            className={`px-6 py-3 text-sm font-medium transition-colors ${sortBy === 'margin' ? 'border-b-2 border-blue-600 text-blue-600' : 'text-gray-500 hover:text-gray-900'}`}
+          >
+            Nejvyšší marže (%)
+          </button>
         </div>
 
         {loading ? (
@@ -253,7 +261,7 @@ export default function HomePage() {
                     <td className="px-4 py-3 text-right font-semibold text-gray-900">{fmt(row.net_quantity)}</td>
                     <td className="px-4 py-3 text-right text-gray-600">{fmtCzk(row.total_revenue)}</td>
                     <td className="px-4 py-3 text-right font-semibold text-green-700">{fmtCzk(row.total_profit)}</td>
-                    <td className="px-4 py-3 text-right text-gray-500">{row.avg_margin_pct.toFixed(1)} %</td>
+                    <td className={`px-4 py-3 text-right font-medium ${sortBy === 'margin' ? 'text-blue-700' : 'text-gray-500'}`}>{row.avg_margin_pct.toFixed(1)} %</td>
                   </tr>
                 ))}
               </tbody>
