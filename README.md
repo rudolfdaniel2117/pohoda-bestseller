@@ -1,8 +1,17 @@
-# PRD Vibe Kit
+# Bestseller Analyzer — POHODA
 
-Předpřipravený kit s AI agenty pro **Product Vibe Coding** workshop.
+Webová aplikace pro identifikaci nejprodávanějších artiklů z exportu pohybů zásob z účetního systému POHODA. Nahrij XLS export, filtruj podle pobočky a období, zobraz žebříček nejprodávanějších a nejziskovějších artiklů.
 
-Žádný kód, žádná appka — jen agenti a pravidla. Všechno si vygeneruješ sám z vlastního PRD.
+## Stack
+Next.js + Supabase + Tailwind + Vercel
+
+## Lokální vývoj
+```bash
+npm install
+npm run dev
+```
+
+---
 
 ## Quick Start
 
