@@ -70,12 +70,11 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: String(err) }, { status: 500 })
   }
 
-  // Vždy vrátíme raw XML — nejspolehlivější diagnostika
+  // Vždy vrátíme surové XML — nejspolehlivější diagnostika
   return NextResponse.json({
     source,
     dateFrom: dateFrom ?? '(bez filtru)',
     rawLength: rawXml.length,
-    // První 3000 znaků surového XML — ukáže strukturu a případné chyby
     rawXml: rawXml.slice(0, 3000),
   }, {
     headers: { 'Content-Type': 'application/json; charset=utf-8' }
