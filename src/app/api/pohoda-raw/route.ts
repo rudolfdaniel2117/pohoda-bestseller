@@ -86,7 +86,6 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: 'Parse error', rawXml: rawXml.slice(0, 2000) })
   }
 
-  // Vrátíme hlavičky prvních 5 pohybů (každý agenda typ)
   const sample = movements.slice(0, 10).map((m) => {
     const mov = m as Record<string, unknown>
     return mov['mov:movementHeader']
@@ -97,6 +96,8 @@ export async function GET(req: NextRequest) {
     dateFrom,
     total: movements.length,
     sample,
+    // Vždy přiložíme první část XML — pomáhá diagnostikovat prázdné výsledky
+    rawSnippet: rawXml.slice(0, 1500),
   }, {
     headers: { 'Content-Type': 'application/json; charset=utf-8' }
   })
