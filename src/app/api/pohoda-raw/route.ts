@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import https from 'node:https'
-import { XMLParser } from 'fast-xml-parser'
+import iconv from 'iconv-lite'
 
 export const maxDuration = 60
 
@@ -9,7 +9,11 @@ const SERVERS = {
   SK: { url: 'https://hosting.upes.cz:14703/xml', ico: '53416511' },
 }
 
-function buildRequest(ico: string, dateFrom: string): string {
+function buildRequest(ico: string, dateFrom?: string): string {
+  const filterBlock = dateFrom
+    ? `<lst:requestMovement><ftr:filter><ftr:dateFrom>${dateFrom}</ftr:dateFrom></ftr:filter></lst:requestMovement>`
+    : `<lst:requestMovement></lst:requestMovement>`
+
   return `<?xml version="1.0" encoding="Windows-1250"?>
 <dat:dataPack
   xmlns:dat="http://www.stormware.cz/schema/version_2/data.xsd"
@@ -19,7 +23,7 @@ function buildRequest(ico: string, dateFrom: string): string {
   id="Z001" ico="${ico}" application="BestsellerAnalyzer" version="2.0" note="">
   <dat:dataPackItem id="1" version="2.0">
     <lst:listMovementRequest version="2.0" movementVersion="2.0">
-      <lst:requestMovement><ftr:filter><ftr:dateFrom>${dateFrom}</ftr:dateFrom></ftr:filter></lst:requestMovement>
+      ${filterBlock}
     </lst:listMovementRequest>
   </dat:dataPackItem>
 </dat:dataPack>`
@@ -39,7 +43,7 @@ function httpsPost(urlStr: string, body: string, headers: Record<string, string>
     }, res => {
       const chunks: Buffer[] = []
       res.on('data', (chunk: Buffer) => chunks.push(chunk))
-      res.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')))
+      res.on('end', () => resolve(iconv.decode(Buffer.concat(chunks), 'win1250')))
     })
     req.on('error', reject)
     req.on('timeout', () => { req.destroy(); reject(new Error('Timeout')) })
@@ -50,8 +54,7 @@ function httpsPost(urlStr: string, body: string, headers: Record<string, string>
 
 export async function GET(req: NextRequest) {
   const source = (req.nextUrl.searchParams.get('source') ?? 'CZ') as 'CZ' | 'SK'
-  // Omezíme na posledních 7 dní aby response nebyla obří
-  const dateFrom = req.nextUrl.searchParams.get('from') ?? new Date(Date.now() - 7 * 86400000).toISOString().split('T')[0]
+  const dateFrom = req.nextUrl.searchParams.get('from') ?? undefined
 
   const { url, ico } = SERVERS[source]
   const user = process.env[`POHODA_USER_${source}`] ?? process.env.POHODA_USER ?? ''
@@ -67,37 +70,12 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: String(err) }, { status: 500 })
   }
 
-  // Parsuj a vrať hlavičky prvních 3 pohybů jako JSON — stačí pro identifikaci polí
-  const parser = new XMLParser({
-    ignoreAttributes: false,
-    attributeNamePrefix: '@_',
-    isArray: (name) => ['lst:movement', 'movement'].includes(name),
-  })
-  const parsed = parser.parse(rawXml)
-
-  let movements: unknown[] = []
-  try {
-    const rsp = (parsed['rsp:responsePack'] ?? parsed['responsePack']) as Record<string, unknown>
-    const item = (rsp?.['rsp:responsePackItem'] ?? rsp?.['responsePackItem']) as Record<string, unknown>
-    const listMov = (item?.['lst:listMovement'] ?? item?.['listMovement']) as Record<string, unknown>
-    const raw = listMov?.['lst:movement'] ?? listMov?.['movement']
-    movements = Array.isArray(raw) ? raw : raw ? [raw] : []
-  } catch {
-    return NextResponse.json({ error: 'Parse error', rawXml: rawXml.slice(0, 2000) })
-  }
-
-  const sample = movements.slice(0, 10).map((m) => {
-    const mov = m as Record<string, unknown>
-    return mov['mov:movementHeader']
-  })
-
+  // Vždy vrátíme surové XML — nejspolehlivější diagnostika
   return NextResponse.json({
     source,
-    dateFrom,
-    total: movements.length,
-    sample,
-    // Vždy přiložíme první část XML — pomáhá diagnostikovat prázdné výsledky
-    rawSnippet: rawXml.slice(0, 1500),
+    dateFrom: dateFrom ?? '(bez filtru)',
+    rawLength: rawXml.length,
+    rawXml: rawXml.slice(0, 3000),
   }, {
     headers: { 'Content-Type': 'application/json; charset=utf-8' }
   })
