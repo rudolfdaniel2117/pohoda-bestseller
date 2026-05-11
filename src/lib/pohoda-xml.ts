@@ -3,29 +3,26 @@ import { XMLParser } from 'fast-xml-parser'
 export type PohodaSource = 'CZ' | 'SK'
 
 const SERVERS: Record<PohodaSource, { url: string; ico: string }> = {
-  CZ: { url: 'http://hosting.upes.cz:13703/xml', ico: '27780988' },
-  SK: { url: 'http://hosting.upes.cz:14703/xml', ico: '53416511' },
+  CZ: { url: 'https://hosting.upes.cz:13703/xml', ico: '27780988' },
+  SK: { url: 'https://hosting.upes.cz:14703/xml', ico: '53416511' },
 }
 
-function buildRequest(ico: string, dateFrom?: string, dateTo?: string): string {
-  const filterBlock = (dateFrom || dateTo) ? `
-        <lst:filter>
-          ${dateFrom ? `<ftr:dateFrom>${dateFrom}</ftr:dateFrom>` : ''}
-          ${dateTo ? `<ftr:dateTo>${dateTo}</ftr:dateTo>` : ''}
-        </lst:filter>` : ''
+// Sestaví XML request pro mServer
+function buildRequest(ico: string, dateFrom?: string): string {
+  const filterBlock = dateFrom
+    ? `<lst:requestMovement><ftr:filter><ftr:dateFrom>${dateFrom}</ftr:dateFrom></ftr:filter></lst:requestMovement>`
+    : `<lst:requestMovement></lst:requestMovement>`
 
   return `<?xml version="1.0" encoding="Windows-1250"?>
 <dat:dataPack
   xmlns:dat="http://www.stormware.cz/schema/version_2/data.xsd"
   xmlns:lst="http://www.stormware.cz/schema/version_2/list.xsd"
-  xmlns:mov="http://www.stormware.cz/schema/version_2/movement.xsd"
   xmlns:ftr="http://www.stormware.cz/schema/version_2/filter.xsd"
   xmlns:typ="http://www.stormware.cz/schema/version_2/type.xsd"
-  id="Z001" ico="${ico}" application="BestsellerAnalyzer" version="2.0">
+  id="Z001" ico="${ico}" application="BestsellerAnalyzer" version="2.0" note="">
   <dat:dataPackItem id="1" version="2.0">
-    <lst:listMovementRequest version="2.0">
-      <lst:requestMovement>${filterBlock}
-      </lst:requestMovement>
+    <lst:listMovementRequest version="2.0" movementVersion="2.0">
+      ${filterBlock}
     </lst:listMovementRequest>
   </dat:dataPackItem>
 </dat:dataPack>`
@@ -46,71 +43,82 @@ export interface ParsedMovement {
   margin_pct: number
 }
 
-function parseMovements(xml: string, source: PohodaSource): ParsedMovement[] {
+function str(v: unknown): string {
+  return v == null ? '' : String(v)
+}
+function num(v: unknown): number {
+  return parseFloat(String(v ?? 0)) || 0
+}
+
+function parseMovements(xml: string, source: PohodaSource, dateTo?: string): ParsedMovement[] {
   const parser = new XMLParser({
     ignoreAttributes: false,
     attributeNamePrefix: '@_',
-    isArray: (name) => name === 'lst:movement',
+    isArray: (name) => ['lst:movement', 'movement'].includes(name),
   })
 
   const result = parser.parse(xml)
   const movements: ParsedMovement[] = []
 
-  // Navigate to the movement list — struktura se může lišit podle verze
+  // Navigace v response struktuře
   let movList: unknown[] = []
   try {
-    const pack = result['dat:dataPack'] ?? result['dataPack']
-    const item = pack?.['dat:dataPackItem'] ?? pack?.['dataPackItem']
-    const listMovement = item?.['lst:listMovement'] ?? item?.['listMovement']
-    movList = listMovement?.['lst:movement'] ?? listMovement?.['movement'] ?? []
-    if (!Array.isArray(movList)) movList = [movList]
+    // response → responsePackItem → listMovement → movement[]
+    const rsp = (result['rsp:responsePack'] ?? result['responsePack']) as Record<string, unknown>
+    const item = (rsp?.['rsp:responsePackItem'] ?? rsp?.['responsePackItem']) as Record<string, unknown>
+    const listMov = (item?.['lst:listMovement'] ?? item?.['listMovement']) as Record<string, unknown>
+    const raw = listMov?.['lst:movement'] ?? listMov?.['movement']
+    movList = Array.isArray(raw) ? raw : raw ? [raw] : []
   } catch {
     return []
   }
 
   for (const mov of movList) {
-    const m = mov as Record<string, unknown>
-    const h = (m?.['mov:movementHeader'] ?? m?.['movementHeader'] ?? {}) as Record<string, unknown>
-    const stock = (h?.['mov:storage'] ?? h?.['mov:stock'] ?? {}) as Record<string, unknown>
-    const stockItem = stock?.['typ:stockItem'] as Record<string, unknown> | undefined
-    const stockRef = stockItem?.['typ:ids'] ?? stock?.['typ:ids'] ?? ''
-    const stockName = stockItem?.['typ:name'] ?? stock?.['typ:name'] ?? ''
+    const h = (mov as Record<string, unknown>)?.['mov:movementHeader'] as Record<string, unknown> ?? {}
 
-    const rawDate = h?.['mov:date'] ?? ''
-    const saleDate = typeof rawDate === 'string' ? rawDate.split('T')[0] : String(rawDate)
+    // Pouze výdejky (prodeje) — přeskočíme příjmy a ostatní
+    const movType = str(h['mov:movementType'])
+    if (movType !== 'expense') continue
 
-    const docNoObj = h?.['mov:number'] as Record<string, unknown> | string | undefined
-    const docNo = (typeof docNoObj === 'object' ? docNoObj?.['typ:numberRequested'] : docNoObj) ?? ''
+    // Datum — filtrujeme dateTo client-side (mServer ho nepodporuje)
+    const saleDate = str(h['mov:date']).split('T')[0]
+    if (dateTo && saleDate > dateTo) continue
 
-    const agenda = String(h?.['mov:agenda'] ?? '')
+    // Artikl — mov:stockItem → typ:stockItem
+    const stockItemParent = (h['mov:stockItem'] ?? {}) as Record<string, unknown>
+    const stockItem = (stockItemParent['typ:stockItem'] ?? {}) as Record<string, unknown>
+    const articleCode = str(stockItem['typ:ids'])
+    const articleName = str(stockItem['typ:name'])
+    if (!articleCode) continue
 
-    const centre = h?.['mov:centre'] as Record<string, unknown> | string | undefined
-    const store = h?.['mov:store'] as Record<string, unknown> | string | undefined
-    const branch = (typeof centre === 'object' ? centre?.['typ:ids'] : centre) ??
-      (typeof store === 'object' ? store?.['typ:ids'] : store) ??
-      source  // fallback: CZ nebo SK
+    // Pobočka — mov:address → typ:address → typ:company
+    const addressParent = (h['mov:address'] ?? {}) as Record<string, unknown>
+    const address = (addressParent['typ:address'] ?? {}) as Record<string, unknown>
+    const branch = str(address['typ:company']) || str(address['typ:name']) || source
 
-    const quantity = parseFloat(String(h?.['mov:quantity'] ?? 0)) || 0
-    const saleAmount = parseFloat(String(h?.['mov:price'] ?? 0)) || 0
-    const weightedCost = parseFloat(String(h?.['mov:weightedPurchasePrice'] ?? 0)) || 0
-    const profit = parseFloat(String(h?.['mov:profit'] ?? 0)) || 0
-    const margin = saleAmount > 0 ? (profit / saleAmount) * 100 : 0
+    // Číslo dokladu
+    const docNo = str(h['mov:number'])
 
-    if (!stockRef && !stockName) continue  // přeskoč prázdné řádky
+    // Ceny
+    const unitPrice = num(h['mov:unitPrice'])  // prodejní cena (Kč)
+    const weightedCost = num(h['mov:weightedPurchasePrice'])
+    const profit = num(h['mov:profit'])
+    const quantity = num(h['mov:quantity'])
+    const marginPct = unitPrice > 0 ? (profit / unitPrice) * 100 : 0
 
     movements.push({
       source,
-      agenda,
-      document_no: String(docNo),
+      agenda: str(h['mov:agenda']),
+      document_no: docNo,
       sale_date: saleDate,
-      article_code: String(stockRef),
-      article_name: String(stockName),
-      branch: String(branch),
+      article_code: articleCode,
+      article_name: articleName,
+      branch,
       quantity,
-      sale_amount: saleAmount,
+      sale_amount: unitPrice,
       weighted_cost: weightedCost,
       profit,
-      margin_pct: margin,
+      margin_pct: marginPct,
     })
   }
 
@@ -121,12 +129,11 @@ export async function fetchFromMServer(
   source: PohodaSource,
   dateFrom?: string,
   dateTo?: string
-): Promise<{ movements: ParsedMovement[]; rawXml?: string; error?: string }> {
+): Promise<{ movements: ParsedMovement[]; error?: string }> {
   const { url, ico } = SERVERS[source]
-  const body = buildRequest(ico, dateFrom, dateTo)
+  // dateTo filtrujeme client-side — mServer ho nepodporuje
+  const body = buildRequest(ico, dateFrom)
 
-  // Credentials z env proměnných (POHODA_USER_CZ / POHODA_PASS_CZ atd.)
-  // Fallback na sdílené POHODA_USER / POHODA_PASS
   const user = process.env[`POHODA_USER_${source}`] ?? process.env.POHODA_USER ?? ''
   const pass = process.env[`POHODA_PASS_${source}`] ?? process.env.POHODA_PASS ?? ''
 
@@ -134,25 +141,38 @@ export async function fetchFromMServer(
     'Content-Type': 'text/xml; charset=windows-1250',
   }
   if (user) {
-    const token = Buffer.from(`${user}:${pass}`).toString('base64')
-    headers['STW-Authorization'] = `Basic ${token}`
+    headers['STW-Authorization'] = `Basic ${Buffer.from(`${user}:${pass}`).toString('base64')}`
   }
 
   const response = await fetch(url, {
     method: 'POST',
     headers,
     body,
-    signal: AbortSignal.timeout(30000),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ...(process.env.NODE_TLS_REJECT_UNAUTHORIZED === '0' ? { agent: null } as any : {}),
+    signal: AbortSignal.timeout(120000), // 2 minuty — může být velký dataset
   })
 
   if (!response.ok) {
-    const body = await response.text().catch(() => '')
-    return { movements: [], error: `HTTP ${response.status}: ${response.statusText}${body ? ` — ${body.slice(0, 200)}` : ''}` }
+    const text = await response.text().catch(() => '')
+    return { movements: [], error: `HTTP ${response.status}: ${response.statusText}${text ? ` — ${text.slice(0, 200)}` : ''}` }
   }
 
   const rawXml = await response.text()
-  // Debug: vypíše prvních 500 znaků do server logu
-  console.log(`[POHODA ${source}] response preview:`, rawXml.slice(0, 500))
-  const movements = parseMovements(rawXml, source)
-  return { movements, rawXml }
+  console.log(`[POHODA ${source}] response size: ${rawXml.length} chars`)
+
+  // Zkontroluj jestli response obsahuje chybu
+  if (rawXml.includes('state="error"') && !rawXml.includes('lst:listMovement')) {
+    const noteMatch = rawXml.match(/note="([^"]{0,300})/)
+    return { movements: [], error: noteMatch ? decodeHtml(noteMatch[1]) : 'Chyba v XML response' }
+  }
+
+  const movements = parseMovements(rawXml, source, dateTo)
+  return { movements }
+}
+
+function decodeHtml(str: string): string {
+  return str
+    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"').replace(/&#xA;/g, ' ')
 }
