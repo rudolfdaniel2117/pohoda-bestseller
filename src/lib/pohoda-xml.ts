@@ -1,4 +1,5 @@
 import { XMLParser } from 'fast-xml-parser'
+import https from 'node:https'
 
 export type PohodaSource = 'CZ' | 'SK'
 
@@ -125,43 +126,55 @@ function parseMovements(xml: string, source: PohodaSource, dateTo?: string): Par
   return movements
 }
 
+// Použijeme Node.js https.request místo fetch — mServer má self-signed certifikát
+function httpsPost(urlStr: string, body: string, headers: Record<string, string>): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const url = new URL(urlStr)
+    const req = https.request({
+      hostname: url.hostname,
+      port: Number(url.port) || 443,
+      path: url.pathname,
+      method: 'POST',
+      headers: { ...headers, 'Content-Length': Buffer.byteLength(body) },
+      rejectUnauthorized: false, // mServer má self-signed certifikát
+      timeout: 120000,
+    }, res => {
+      const chunks: Buffer[] = []
+      res.on('data', (chunk: Buffer) => chunks.push(chunk))
+      res.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')))
+    })
+    req.on('error', reject)
+    req.on('timeout', () => { req.destroy(); reject(new Error('Timeout')) })
+    req.write(body)
+    req.end()
+  })
+}
+
 export async function fetchFromMServer(
   source: PohodaSource,
   dateFrom?: string,
   dateTo?: string
 ): Promise<{ movements: ParsedMovement[]; error?: string }> {
   const { url, ico } = SERVERS[source]
-  // dateTo filtrujeme client-side — mServer ho nepodporuje
   const body = buildRequest(ico, dateFrom)
 
   const user = process.env[`POHODA_USER_${source}`] ?? process.env.POHODA_USER ?? ''
   const pass = process.env[`POHODA_PASS_${source}`] ?? process.env.POHODA_PASS ?? ''
 
-  const headers: Record<string, string> = {
-    'Content-Type': 'text/xml; charset=windows-1250',
-  }
+  const headers: Record<string, string> = { 'Content-Type': 'text/xml; charset=windows-1250' }
   if (user) {
     headers['STW-Authorization'] = `Basic ${Buffer.from(`${user}:${pass}`).toString('base64')}`
   }
 
-  const response = await fetch(url, {
-    method: 'POST',
-    headers,
-    body,
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    ...(process.env.NODE_TLS_REJECT_UNAUTHORIZED === '0' ? { agent: null } as any : {}),
-    signal: AbortSignal.timeout(120000), // 2 minuty — může být velký dataset
-  })
-
-  if (!response.ok) {
-    const text = await response.text().catch(() => '')
-    return { movements: [], error: `HTTP ${response.status}: ${response.statusText}${text ? ` — ${text.slice(0, 200)}` : ''}` }
+  let rawXml: string
+  try {
+    rawXml = await httpsPost(url, body, headers)
+  } catch (err) {
+    return { movements: [], error: `Síťová chyba: ${err instanceof Error ? err.message : String(err)}` }
   }
 
-  const rawXml = await response.text()
   console.log(`[POHODA ${source}] response size: ${rawXml.length} chars`)
 
-  // Zkontroluj jestli response obsahuje chybu
   if (rawXml.includes('state="error"') && !rawXml.includes('lst:listMovement')) {
     const noteMatch = rawXml.match(/note="([^"]{0,300})/)
     return { movements: [], error: noteMatch ? decodeHtml(noteMatch[1]) : 'Chyba v XML response' }
