@@ -69,7 +69,6 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: String(err) }, { status: 500 })
   }
 
-  // Vždy vrátíme surové XML — nejspolehlivější diagnostika
   return NextResponse.json({
     source,
     dateFrom: dateFrom ?? '(bez filtru)',
