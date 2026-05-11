@@ -125,18 +125,34 @@ export async function fetchFromMServer(
   const { url, ico } = SERVERS[source]
   const body = buildRequest(ico, dateFrom, dateTo)
 
+  // Credentials z env proměnných (POHODA_USER_CZ / POHODA_PASS_CZ atd.)
+  // Fallback na sdílené POHODA_USER / POHODA_PASS
+  const user = process.env[`POHODA_USER_${source}`] ?? process.env.POHODA_USER ?? ''
+  const pass = process.env[`POHODA_PASS_${source}`] ?? process.env.POHODA_PASS ?? ''
+
+  const headers: Record<string, string> = {
+    'Content-Type': 'text/xml; charset=windows-1250',
+  }
+  if (user) {
+    const token = Buffer.from(`${user}:${pass}`).toString('base64')
+    headers['STW-Authorization'] = `Basic ${token}`
+  }
+
   const response = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'text/xml; charset=windows-1250' },
+    headers,
     body,
     signal: AbortSignal.timeout(30000),
   })
 
   if (!response.ok) {
-    return { movements: [], error: `HTTP ${response.status}: ${response.statusText}` }
+    const body = await response.text().catch(() => '')
+    return { movements: [], error: `HTTP ${response.status}: ${response.statusText}${body ? ` — ${body.slice(0, 200)}` : ''}` }
   }
 
   const rawXml = await response.text()
+  // Debug: vypíše prvních 500 znaků do server logu
+  console.log(`[POHODA ${source}] response preview:`, rawXml.slice(0, 500))
   const movements = parseMovements(rawXml, source)
   return { movements, rawXml }
 }
