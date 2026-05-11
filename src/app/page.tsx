@@ -176,11 +176,25 @@ export default function HomePage() {
   const fmt = (n: number) => n.toLocaleString('cs-CZ', { maximumFractionDigits: 0 })
   const fmtCzk = (n: number) => n.toLocaleString('cs-CZ', { style: 'currency', currency: 'CZK', maximumFractionDigits: 0 })
 
+  // mServer je dostupný jen z lokální sítě — na Vercelu fetch selže
+  const isLocalhost = typeof window !== 'undefined' &&
+    (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1')
+
   return (
     <div className="space-y-6">
       {/* POHODA Import */}
       <div className="bg-white rounded-xl border border-gray-200 p-6">
         <h2 className="font-semibold text-gray-900 mb-4">Načíst data z POHODy</h2>
+
+        {!isLocalhost && (
+          <div className="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-800">
+            <strong>Import funguje pouze lokálně.</strong> POHODA mServer je dostupný jen z vaší sítě.
+            Spusť <code className="bg-amber-100 px-1 rounded">npm run dev</code> na svém počítači
+            a importuj na <a href="http://localhost:3000" className="underline font-medium">localhost:3000</a>.
+            Zde na Vercelu funguje pouze prohlížení již importovaných dat.
+          </div>
+        )}
+
         <div className="flex flex-wrap gap-4 items-end">
           <div>
             <label className="block text-xs text-gray-500 mb-2">Zdroj dat</label>
@@ -189,7 +203,8 @@ export default function HomePage() {
                 <button
                   key={s}
                   onClick={() => toggleSource(s)}
-                  className={`px-4 py-2 rounded-lg text-sm font-medium border transition-colors ${fetchSources.has(s) ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-500 border-gray-200 hover:border-gray-400'}`}
+                  disabled={!isLocalhost}
+                  className={`px-4 py-2 rounded-lg text-sm font-medium border transition-colors ${fetchSources.has(s) ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-500 border-gray-200 hover:border-gray-400'} disabled:opacity-40 disabled:cursor-not-allowed`}
                 >
                   {s}
                 </button>
@@ -198,7 +213,7 @@ export default function HomePage() {
           </div>
           <button
             onClick={handleFetchPohoda}
-            disabled={fetching}
+            disabled={fetching || !isLocalhost}
             className="px-5 py-2 bg-blue-600 text-white rounded-lg text-sm font-medium hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
           >
             {fetching ? 'Načítám...' : '⬇ Načíst pohyby'}
