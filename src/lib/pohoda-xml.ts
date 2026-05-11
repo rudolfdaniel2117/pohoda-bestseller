@@ -1,6 +1,5 @@
 import { XMLParser } from 'fast-xml-parser'
 import https from 'node:https'
-import iconv from 'iconv-lite'
 
 export type PohodaSource = 'CZ' | 'SK'
 
@@ -175,7 +174,8 @@ function httpsPost(urlStr: string, body: string, headers: Record<string, string>
     }, res => {
       const chunks: Buffer[] = []
       res.on('data', (chunk: Buffer) => chunks.push(chunk))
-      res.on('end', () => resolve(iconv.decode(Buffer.concat(chunks), 'win1250')))
+      // TextDecoder('windows-1250') je vestavěný v Node.js 18+ — nepotřebuje externí závislost
+      res.on('end', () => resolve(new TextDecoder('windows-1250').decode(Buffer.concat(chunks))))
     })
     req.on('error', reject)
     req.on('timeout', () => { req.destroy(); reject(new Error('Timeout')) })
