@@ -51,6 +51,9 @@ function num(v: unknown): number {
   return parseFloat(String(v ?? 0)) || 0
 }
 
+// Kurz EUR → CZK pro SK data
+const EUR_TO_CZK = 25
+
 function parseMovements(xml: string, source: PohodaSource, dateTo?: string): ParsedMovement[] {
   const parser = new XMLParser({
     ignoreAttributes: false,
@@ -77,7 +80,11 @@ function parseMovements(xml: string, source: PohodaSource, dateTo?: string): Par
   for (const mov of movList) {
     const h = (mov as Record<string, unknown>)?.['mov:movementHeader'] as Record<string, unknown> ?? {}
 
-    // Pouze výdejky (prodeje) — přeskočíme příjmy a ostatní
+    // FIX 1: Pouze prodejky — přeskočíme faktury, převody, příjmy
+    const agenda = str(h['mov:agenda'])
+    if (agenda !== 'saleVoucher' && agenda !== 'predajka') continue
+
+    // Pouze výdeje (ne příjmy/vrátky na skladu)
     const movType = str(h['mov:movementType'])
     if (movType !== 'expense') continue
 
@@ -92,24 +99,27 @@ function parseMovements(xml: string, source: PohodaSource, dateTo?: string): Par
     const articleName = str(stockItem['typ:name'])
     if (!articleCode) continue
 
-    // Pobočka — mov:address → typ:address → typ:company
-    const addressParent = (h['mov:address'] ?? {}) as Record<string, unknown>
-    const address = (addressParent['typ:address'] ?? {}) as Record<string, unknown>
-    const branch = str(address['typ:company']) || str(address['typ:name']) || source
+    // FIX 2: Pobočka — mov:storage → typ:storage → typ:ids (např. "Zlín-VO")
+    // Bereme první část před lomítkem (např. "Zlín-VO/SWE Sklad" → "Zlín-VO")
+    const storageParent = (h['mov:storage'] ?? {}) as Record<string, unknown>
+    const storage = (storageParent['typ:storage'] ?? {}) as Record<string, unknown>
+    const storageIds = str(storage['typ:ids'])
+    const branch = storageIds ? storageIds.split('/')[0].trim() : source
 
     // Číslo dokladu
     const docNo = str(h['mov:number'])
 
-    // Ceny
-    const unitPrice = num(h['mov:unitPrice'])  // prodejní cena (Kč)
-    const weightedCost = num(h['mov:weightedPurchasePrice'])
-    const profit = num(h['mov:profit'])
+    // Ceny — FIX 3: SK data jsou v EUR, převedeme na CZK (×25)
+    const fxRate = source === 'SK' ? EUR_TO_CZK : 1
+    const unitPrice = num(h['mov:unitPrice']) * fxRate
+    const weightedCost = num(h['mov:weightedPurchasePrice']) * fxRate
+    const profit = num(h['mov:profit']) * fxRate
     const quantity = num(h['mov:quantity'])
     const marginPct = unitPrice > 0 ? (profit / unitPrice) * 100 : 0
 
     movements.push({
       source,
-      agenda: str(h['mov:agenda']),
+      agenda,
       document_no: docNo,
       sale_date: saleDate,
       article_code: articleCode,
