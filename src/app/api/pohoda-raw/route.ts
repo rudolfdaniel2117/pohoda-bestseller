@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
 import https from 'node:https'
-import iconv from 'iconv-lite'
 
 export const maxDuration = 60
 
@@ -43,7 +42,7 @@ function httpsPost(urlStr: string, body: string, headers: Record<string, string>
     }, res => {
       const chunks: Buffer[] = []
       res.on('data', (chunk: Buffer) => chunks.push(chunk))
-      res.on('end', () => resolve(iconv.decode(Buffer.concat(chunks), 'win1250')))
+      res.on('end', () => resolve(new TextDecoder('windows-1250').decode(Buffer.concat(chunks))))
     })
     req.on('error', reject)
     req.on('timeout', () => { req.destroy(); reject(new Error('Timeout')) })
@@ -70,7 +69,6 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: String(err) }, { status: 500 })
   }
 
-  // Vždy vrátíme surové XML — nejspolehlivější diagnostika
   return NextResponse.json({
     source,
     dateFrom: dateFrom ?? '(bez filtru)',
