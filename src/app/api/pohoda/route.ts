@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from 'next/server'
 import { fetchFromMServer } from '@/lib/pohoda-xml'
 import type { PohodaSource } from '@/lib/pohoda-xml'
 
+// Vercel: prodluž timeout na max 60s (hobby plán)
+export const maxDuration = 60
+
 export async function POST(req: NextRequest) {
   const { dateFrom, dateTo, sources } = await req.json() as {
     dateFrom?: string

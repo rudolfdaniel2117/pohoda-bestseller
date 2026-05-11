@@ -77,6 +77,14 @@ function parseMovements(xml: string, source: PohodaSource, dateTo?: string): Par
     return []
   }
 
+  // DEBUG: loguj unikátní hodnoty agenda + storage z prvních 5 záznamů
+  const debugSample = movList.slice(0, 5)
+  console.log(`[POHODA ${source}] DEBUG sample (${debugSample.length} záznamy z ${movList.length} celkem):`)
+  for (const mov of debugSample) {
+    const h = (mov as Record<string, unknown>)?.['mov:movementHeader'] as Record<string, unknown> ?? {}
+    console.log(`  agenda=${str(h['mov:agenda'])} movType=${str(h['mov:movementType'])} storage=${JSON.stringify(h['mov:storage'])} centre=${JSON.stringify(h['mov:centre'])} number=${str(h['mov:number'])} profit=${str(h['mov:profit'])}`)
+  }
+
   for (const mov of movList) {
     const h = (mov as Record<string, unknown>)?.['mov:movementHeader'] as Record<string, unknown> ?? {}
 
