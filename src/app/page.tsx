@@ -15,7 +15,8 @@ export default function HomePage() {
   const [fetchSources, setFetchSources] = useState<Set<PohodaSource>>(new Set(['CZ', 'SK']))
   const [branches, setBranches] = useState<string[]>([])
   const [selectedBranch, setSelectedBranch] = useState('')
-  const [dateFrom, setDateFrom] = useState('')
+  // Výchozí: od začátku letošního roku — bez filtru by mServer vracel celou historii a timeoutoval
+  const [dateFrom, setDateFrom] = useState(() => `${new Date().getFullYear()}-01-01`)
   const [dateTo, setDateTo] = useState('')
   const [allBestsellers, setAllBestsellers] = useState<BestsellerRow[]>([])
   const [sortBy, setSortBy] = useState<'quantity' | 'profit' | 'margin'>('quantity')
