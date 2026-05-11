@@ -1,5 +1,6 @@
 import { XMLParser } from 'fast-xml-parser'
 import https from 'node:https'
+import iconv from 'iconv-lite'
 
 export type PohodaSource = 'CZ' | 'SK'
 
@@ -77,14 +78,6 @@ function parseMovements(xml: string, source: PohodaSource, dateTo?: string): Par
     return []
   }
 
-  // DEBUG: loguj unikátní hodnoty agenda + storage z prvních 5 záznamů
-  const debugSample = movList.slice(0, 5)
-  console.log(`[POHODA ${source}] DEBUG sample (${debugSample.length} záznamy z ${movList.length} celkem):`)
-  for (const mov of debugSample) {
-    const h = (mov as Record<string, unknown>)?.['mov:movementHeader'] as Record<string, unknown> ?? {}
-    console.log(`  agenda=${str(h['mov:agenda'])} movType=${str(h['mov:movementType'])} storage=${JSON.stringify(h['mov:storage'])} centre=${JSON.stringify(h['mov:centre'])} number=${str(h['mov:number'])} profit=${str(h['mov:profit'])}`)
-  }
-
   for (const mov of movList) {
     const h = (mov as Record<string, unknown>)?.['mov:movementHeader'] as Record<string, unknown> ?? {}
 
@@ -107,12 +100,9 @@ function parseMovements(xml: string, source: PohodaSource, dateTo?: string): Par
     const articleName = str(stockItem['typ:name'])
     if (!articleCode) continue
 
-    // FIX 2: Pobočka — mov:storage → typ:storage → typ:ids (např. "Zlín-VO")
-    // Bereme první část před lomítkem (např. "Zlín-VO/SWE Sklad" → "Zlín-VO")
-    const storageParent = (h['mov:storage'] ?? {}) as Record<string, unknown>
-    const storage = (storageParent['typ:storage'] ?? {}) as Record<string, unknown>
-    const storageIds = str(storage['typ:ids'])
-    const branch = storageIds ? storageIds.split('/')[0].trim() : source
+    // Pobočka — mov:centre.typ:ids (středisko = prodejna, např. "ŠP Centrum", "Zlín-VO")
+    const centre = (h['mov:centre'] ?? {}) as Record<string, unknown>
+    const branch = str(centre['typ:ids']) || source
 
     // Číslo dokladu
     const docNo = str(h['mov:number'])
@@ -159,7 +149,8 @@ function httpsPost(urlStr: string, body: string, headers: Record<string, string>
     }, res => {
       const chunks: Buffer[] = []
       res.on('data', (chunk: Buffer) => chunks.push(chunk))
-      res.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')))
+      // mServer vrací Windows-1250 — musíme správně dekódovat, jinak se rozbijí háčky/čárky
+      res.on('end', () => resolve(iconv.decode(Buffer.concat(chunks), 'win1250')))
     })
     req.on('error', reject)
     req.on('timeout', () => { req.destroy(); reject(new Error('Timeout')) })
