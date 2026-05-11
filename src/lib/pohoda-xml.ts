@@ -1,5 +1,6 @@
 import { XMLParser } from 'fast-xml-parser'
 import https from 'node:https'
+import iconv from 'iconv-lite'
 
 export type PohodaSource = 'CZ' | 'SK'
 
@@ -7,6 +8,9 @@ const SERVERS: Record<PohodaSource, { url: string; ico: string }> = {
   CZ: { url: 'https://hosting.upes.cz:13703/xml', ico: '27780988' },
   SK: { url: 'https://hosting.upes.cz:14703/xml', ico: '53416511' },
 }
+
+// Kurz EUR → CZK pro SK data
+const EUR_TO_CZK = 25
 
 // Sestaví XML request pro mServer
 function buildRequest(ico: string, dateFrom?: string): string {
@@ -51,9 +55,6 @@ function num(v: unknown): number {
   return parseFloat(String(v ?? 0)) || 0
 }
 
-// Kurz EUR → CZK pro SK data
-const EUR_TO_CZK = 25
-
 function parseMovements(xml: string, source: PohodaSource, dateTo?: string): ParsedMovement[] {
   const parser = new XMLParser({
     ignoreAttributes: false,
@@ -67,7 +68,6 @@ function parseMovements(xml: string, source: PohodaSource, dateTo?: string): Par
   // Navigace v response struktuře
   let movList: unknown[] = []
   try {
-    // response → responsePackItem → listMovement → movement[]
     const rsp = (result['rsp:responsePack'] ?? result['responsePack']) as Record<string, unknown>
     const item = (rsp?.['rsp:responsePackItem'] ?? rsp?.['responsePackItem']) as Record<string, unknown>
     const listMov = (item?.['lst:listMovement'] ?? item?.['listMovement']) as Record<string, unknown>
@@ -77,18 +77,12 @@ function parseMovements(xml: string, source: PohodaSource, dateTo?: string): Par
     return []
   }
 
-  // DEBUG: loguj unikátní hodnoty agenda + storage z prvních 5 záznamů
-  const debugSample = movList.slice(0, 5)
-  console.log(`[POHODA ${source}] DEBUG sample (${debugSample.length} záznamy z ${movList.length} celkem):`)
-  for (const mov of debugSample) {
-    const h = (mov as Record<string, unknown>)?.['mov:movementHeader'] as Record<string, unknown> ?? {}
-    console.log(`  agenda=${str(h['mov:agenda'])} movType=${str(h['mov:movementType'])} storage=${JSON.stringify(h['mov:storage'])} centre=${JSON.stringify(h['mov:centre'])} number=${str(h['mov:number'])} profit=${str(h['mov:profit'])}`)
-  }
+  console.log(`[POHODA ${source}] celkem pohybů: ${movList.length}`)
 
   for (const mov of movList) {
     const h = (mov as Record<string, unknown>)?.['mov:movementHeader'] as Record<string, unknown> ?? {}
 
-    // FIX 1: Pouze prodejky — přeskočíme faktury, převody, příjmy
+    // Pouze prodejky — přeskočíme faktury, převody, příjmy
     const agenda = str(h['mov:agenda'])
     if (agenda !== 'saleVoucher' && agenda !== 'predajka') continue
 
@@ -96,7 +90,7 @@ function parseMovements(xml: string, source: PohodaSource, dateTo?: string): Par
     const movType = str(h['mov:movementType'])
     if (movType !== 'expense') continue
 
-    // Datum — filtrujeme dateTo client-side (mServer ho nepodporuje)
+    // Datum — filtrujeme dateTo client-side (mServer nepodporuje ftr:dateTo)
     const saleDate = str(h['mov:date']).split('T')[0]
     if (dateTo && saleDate > dateTo) continue
 
@@ -107,23 +101,30 @@ function parseMovements(xml: string, source: PohodaSource, dateTo?: string): Par
     const articleName = str(stockItem['typ:name'])
     if (!articleCode) continue
 
-    // FIX 2: Pobočka — mov:storage → typ:storage → typ:ids (např. "Zlín-VO")
-    // Bereme první část před lomítkem (např. "Zlín-VO/SWE Sklad" → "Zlín-VO")
-    const storageParent = (h['mov:storage'] ?? {}) as Record<string, unknown>
-    const storage = (storageParent['typ:storage'] ?? {}) as Record<string, unknown>
-    const storageIds = str(storage['typ:ids'])
-    const branch = storageIds ? storageIds.split('/')[0].trim() : source
+    // Pobočka — mov:centre.typ:ids (středisko = prodejna, např. "ŠP Centrum", "Zlín")
+    const centre = (h['mov:centre'] ?? {}) as Record<string, unknown>
+    const branch = str(centre['typ:ids']) || source
 
     // Číslo dokladu
     const docNo = str(h['mov:number'])
 
-    // Ceny — FIX 3: SK data jsou v EUR, převedeme na CZK (×25)
+    // Množství
+    const quantity = num(h['mov:quantity'])
+
+    // Ceny — SK data jsou v EUR, převedeme na CZK (×25)
+    // mov:unitPrice          = prodejní cena za 1 ks
+    // mov:profitUnit         = zisk za 1 ks (mov:profit je za celý doklad — nepoužíváme)
+    // mov:weightedPurchasePrice = vážená nákupní cena za 1 ks
     const fxRate = source === 'SK' ? EUR_TO_CZK : 1
     const unitPrice = num(h['mov:unitPrice']) * fxRate
-    const weightedCost = num(h['mov:weightedPurchasePrice']) * fxRate
-    const profit = num(h['mov:profit']) * fxRate
-    const quantity = num(h['mov:quantity'])
-    const marginPct = unitPrice > 0 ? (profit / unitPrice) * 100 : 0
+    const profitPerUnit = num(h['mov:profitUnit']) * fxRate
+    const weightedCostPerUnit = num(h['mov:weightedPurchasePrice']) * fxRate
+
+    // Celkové hodnoty za řádek = per-unit × quantity
+    const saleAmount = unitPrice * quantity
+    const totalProfit = profitPerUnit * quantity
+    const totalCost = weightedCostPerUnit * quantity
+    const marginPct = unitPrice > 0 ? (profitPerUnit / unitPrice) * 100 : 0
 
     movements.push({
       source,
@@ -134,9 +135,9 @@ function parseMovements(xml: string, source: PohodaSource, dateTo?: string): Par
       article_name: articleName,
       branch,
       quantity,
-      sale_amount: unitPrice,
-      weighted_cost: weightedCost,
-      profit,
+      sale_amount: saleAmount,
+      weighted_cost: totalCost,
+      profit: totalProfit,
       margin_pct: marginPct,
     })
   }
@@ -145,6 +146,7 @@ function parseMovements(xml: string, source: PohodaSource, dateTo?: string): Par
 }
 
 // Použijeme Node.js https.request místo fetch — mServer má self-signed certifikát
+// iconv.decode: mServer vrací Windows-1250, musíme správně dekódovat háčky/čárky
 function httpsPost(urlStr: string, body: string, headers: Record<string, string>): Promise<string> {
   return new Promise((resolve, reject) => {
     const url = new URL(urlStr)
@@ -159,7 +161,7 @@ function httpsPost(urlStr: string, body: string, headers: Record<string, string>
     }, res => {
       const chunks: Buffer[] = []
       res.on('data', (chunk: Buffer) => chunks.push(chunk))
-      res.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')))
+      res.on('end', () => resolve(iconv.decode(Buffer.concat(chunks), 'win1250')))
     })
     req.on('error', reject)
     req.on('timeout', () => { req.destroy(); reject(new Error('Timeout')) })
