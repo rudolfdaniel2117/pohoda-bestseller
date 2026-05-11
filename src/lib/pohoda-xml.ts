@@ -101,9 +101,23 @@ function parseMovements(xml: string, source: PohodaSource, dateTo?: string): Par
     const articleName = str(stockItem['typ:name'])
     if (!articleCode) continue
 
-    // Pobočka — mov:centre.typ:ids (středisko = prodejna, např. "ŠP Centrum", "Zlín")
+    // Pobočka:
+    // SK: mov:centre.typ:ids = string název ("BP", "Lucky", "ŠP Centrum")
+    // CZ: mov:centre.typ:ids = číslo (25, 46...) → použijeme mov:address.typ:address.typ:company
     const centre = (h['mov:centre'] ?? {}) as Record<string, unknown>
-    const branch = str(centre['typ:ids']) || source
+    const centreIds = str(centre['typ:ids'])
+    const isNumericCentre = /^\d+$/.test(centreIds)
+
+    let branch: string
+    if (centreIds && !isNumericCentre) {
+      // SK — centrum má string název
+      branch = centreIds
+    } else {
+      // CZ — centrum je číslo, použijeme název z adresy dokladu (= název prodejny)
+      const addrParent = (h['mov:address'] ?? {}) as Record<string, unknown>
+      const addr = (addrParent['typ:address'] ?? {}) as Record<string, unknown>
+      branch = str(addr['typ:company']) || str(addr['typ:name']) || source
+    }
 
     // Číslo dokladu
     const docNo = str(h['mov:number'])
